@@ -1,5 +1,6 @@
-import os
+import matplotlib.pyplot as plt # needs to be here otherwise matplotlib crashes
 import numpy as np
+import os
 import torch
 import torch.nn.functional as F
 import torchvision
@@ -22,6 +23,7 @@ from torchvision.utils import save_image, make_grid
 from lpipsPyTorch import lpips
 from scene.utils import save_render_orb, save_depth_orb, save_normal_orb, save_albedo_orb, save_roughness_orb
 
+resolution = 1.0
 
 def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams, is_pbr=False):
     first_iter = 0
@@ -30,8 +32,11 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
     """
     Setup Gaussians
     """
+    global resolution
+    resolution = 1/args.target_resolution
+
     gaussians = GaussianModel(dataset.sh_degree, render_type=args.type)
-    scene = Scene(dataset, gaussians)
+    scene = Scene(dataset, gaussians, resolution_scales=[resolution], shuffle=False)
     if args.checkpoint:
         print("Create Gaussians from checkpoint {}".format(args.checkpoint))
         first_iter = gaussians.create_from_ckpt(args.checkpoint, restore_optimizer=True)
@@ -79,7 +84,7 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
     """ GUI """
     windows = None
     if args.gui:
-        cam = scene.getTrainCameras()[0]
+        cam = scene.getTrainCameras(resolution)[0]
         c2w = cam.c2w.detach().cpu().numpy()
         center = gaussians.get_xyz.mean(dim=0).detach().cpu().numpy()
 
@@ -96,7 +101,9 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
     ema_dict_for_log = defaultdict(int)
     progress_bar = tqdm(range(first_iter + 1, opt.iterations + 1), desc="Training progress",
                         initial=first_iter, total=opt.iterations)
-    
+    losses = []
+    psnrs = []
+    ssims = []
     for iteration in progress_bar:
         gaussians.update_learning_rate(iteration)
 
@@ -113,7 +120,7 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
 
         # Pick a random Camera
         if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
+            viewpoint_stack = scene.getTrainCameras(resolution).copy()
 
         loss = 0
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack) - 1))
@@ -134,9 +141,16 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
         loss += render_pkg["loss"]
         loss.backward()
 
+        
+        
+        
+        losses.append( tb_dict["loss_l1"] )
+        psnrs.append( tb_dict["psnr"] )
+        ssims.append( tb_dict["ssim"] )
+
         with torch.no_grad():
             if pipe.save_training_vis:
-                save_training_vis(viewpoint_cam, gaussians, background, render_fn,
+                save_training_vis(scene, viewpoint_cam, gaussians, background, render_fn,
                                   pipe, opt, first_iter, iteration, pbr_kwargs)
             # Progress bar
             pbar_dict = {"num": gaussians.get_xyz.shape[0]}
@@ -168,7 +182,7 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     densify_grad_normal_threshold = opt.densify_grad_normal_threshold if iteration > opt.normal_densify_from_iter else 99999
                     gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold,
-                                                densify_grad_normal_threshold)
+                                                densify_grad_normal_threshold, iteration=iteration, _path=args.model_path)
 
                 if iteration % opt.opacity_reset_interval == 0 or (
                         dataset.white_background and iteration == opt.densify_from_iter):
@@ -204,6 +218,8 @@ def training(dataset: ModelParams, opt: OptimizationParams, pipe: PipelineParams
 
     if dataset.eval:
         eval_render(scene, gaussians, render_fn, pipe, background, opt, pbr_kwargs)
+    
+    return losses, psnrs, ssims
 
 
 def training_report(tb_writer, iteration, tb_dict, scene: Scene, renderFunc, pipe,
@@ -216,8 +232,8 @@ def training_report(tb_writer, iteration, tb_dict, scene: Scene, renderFunc, pip
     # Report test and samples of training set
     if iteration % args.test_interval == 0:
         torch.cuda.empty_cache()
-        validation_configs = ({'name': 'test', 'cameras': scene.getTestCameras()},
-                              {'name': 'train', 'cameras': scene.getTrainCameras()})
+        validation_configs = ({'name': 'test', 'cameras': scene.getTestCameras(resolution)},
+                              {'name': 'train', 'cameras': scene.getTrainCameras(resolution)})
 
         for config in validation_configs:
             if config['cameras'] and len(config['cameras']) > 0:
@@ -273,8 +289,12 @@ def training_report(tb_writer, iteration, tb_dict, scene: Scene, renderFunc, pip
         torch.cuda.empty_cache()
 
 
-def save_training_vis(viewpoint_cam, gaussians, background, render_fn, pipe, opt, first_iter, iteration, pbr_kwargs):
+def save_training_vis(scene: Scene, viewpoint_cam, gaussians, background, render_fn, pipe, opt, first_iter, iteration, pbr_kwargs):
     os.makedirs(os.path.join(args.model_path, "visualize"), exist_ok=True)
+    
+    # DEBUG
+    viewpoint_cam = scene.getTrainCameras(resolution).copy()[12]
+    
     with torch.no_grad():
         if iteration % pipe.save_training_vis_iteration == 0 or iteration == first_iter + 1:
             render_pkg = render_fn(viewpoint_cam, gaussians, pipe, background,
@@ -288,6 +308,8 @@ def save_training_vis(viewpoint_cam, gaussians, background, render_fn, pipe, opt
                 render_pkg["opacity"].repeat(3, 1, 1),
                 render_pkg["normal"] * 0.5 + 0.5,
                 render_pkg["pseudo_normal"] * 0.5 + 0.5,
+                # bbox
+                render_pkg["bbox"]
             ]
 
             if is_pbr:
@@ -406,7 +428,12 @@ if __name__ == "__main__":
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
 
     is_pbr = args.type in ['neilf']
-    training(lp.extract(args), op.extract(args), pp.extract(args), is_pbr=is_pbr)
+    l1s, psnrs, ssims = training(lp.extract(args), op.extract(args), pp.extract(args), is_pbr=is_pbr)
 
+    np.save( os.path.join(args.model_path, "l1_losses.npy"), np.array(l1s)   )
+    np.save( os.path.join(args.model_path, "psnrs.npy"),     np.array(psnrs) )
+    np.save( os.path.join(args.model_path, "ssims.npy"),     np.array(ssims) )
+
+        
     # All done
     print("\nTraining complete.")

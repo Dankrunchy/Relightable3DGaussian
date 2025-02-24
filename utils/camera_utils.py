@@ -36,7 +36,7 @@ def loadCam(args, id, cam_info, resolution_scale):
     if scale == 1:
         resized_image_rgb = image
     else:
-        resized_image_rgb = torchvision.transforms.Resize(resolution, antialias=True)(image)
+        resized_image_rgb = torchvision.transforms.Resize(resolution, antialias=False)(image)
     gt_image = resized_image_rgb
 
     resized_depth = None
@@ -62,11 +62,11 @@ def loadCam(args, id, cam_info, resolution_scale):
     scale_cy = cam_info.cy
     scale_fx = cam_info.fx
     scale_fy = cam_info.fy
-    if cam_info.cx is not None and cam_info.cy is not None:
-        scale_cx /= scale
-        scale_cy /= scale
-        scale_fx /= scale
-        scale_fy /= scale
+    # if cam_info.cx is not None and cam_info.cy is not None:
+    #     scale_cx /= scale
+    #     scale_cy /= scale
+    #     scale_fx /= scale
+    #     scale_fy /= scale
 
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T,
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, fx=scale_fx, fy=scale_fy, cx=scale_cx, cy=scale_cy,

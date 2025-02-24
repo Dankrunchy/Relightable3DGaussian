@@ -92,7 +92,8 @@ def render_view(camera: Camera, pc: GaussianModel, pipe, bg_color: torch.Tensor,
     
     # Rasterize visible Gaussians to image, obtain their radii (on screen).
     (num_rendered, num_contrib, rendered_image, rendered_opacity, rendered_depth,
-     rendered_feature, rendered_pseudo_normal, rendered_surface_xyz, weights, radii) = rasterizer(
+     rendered_feature, rendered_pseudo_normal, rendered_surface_xyz, weights, radii, 
+     bbox) = rasterizer(
         means3D=means3D,
         means2D=means2D,
         shs=shs,
@@ -129,7 +130,8 @@ def render_view(camera: Camera, pc: GaussianModel, pipe, bg_color: torch.Tensor,
                "opacities": opacity,
                "normals": normals,
                "directions": dir_pp_normalized,
-               "weights": weights}
+               "weights": weights,
+               "bbox": bbox}
     
     return results
 
@@ -199,6 +201,7 @@ def calculate_loss(viewpoint_camera, pc, render_pkg, opt, iteration):
     if opt.lambda_depth_var > 0:
         depth_var = render_pkg["depth_var"]
         loss_depth_var = depth_var.clamp_min(1e-6).sqrt().mean()
+        # print(loss_depth_var)
         tb_dict["loss_depth_var"] = loss_depth_var.item()
         lambda_depth_var = opt.lambda_depth_var * min(math.pow(10, iteration / 5000), 100)
         # lambda_depth_var = opt.lambda_depth_var

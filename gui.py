@@ -310,6 +310,7 @@ class GUI:
 
         dpg.setup_dearpygui()
         dpg.show_viewport()
+        pass
 
 
 if __name__ == '__main__':
