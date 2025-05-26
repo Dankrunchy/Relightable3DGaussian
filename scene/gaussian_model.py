@@ -1,5 +1,6 @@
-import os
+import matplotlib.pyplot as plt
 import numpy as np
+import os
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -15,6 +16,8 @@ from arguments import OptimizationParams
 from tqdm import tqdm
 from bvh import RayTracer
 from utils.graphics_utils import fibonacci_sphere_sampling
+
+from pathlib import Path
 
 
 def sample_incident_rays(normals, is_training=False, sample_num=24):
@@ -413,6 +416,24 @@ class GaussianModel:
 
         return first_iter
 
+    def set_gaussian(self, position, scale, rotation, color, opacity):
+        """very rudimentary function to set a single gaussian to be renderd
+        """
+        position = position.reshape(1,3)
+        scale = self.scaling_inverse_activation(scale.reshape(1,3))
+        rotation = rotation.reshape(1,4)
+        opacity = self.inverse_opacity_activation( opacity.reshape(1,1) )
+        
+        self._xyz = nn.Parameter(position.requires_grad_(True))
+        self._normal = nn.Parameter(torch.ones_like(position).requires_grad_(True))
+        self._rotation = nn.Parameter(rotation.requires_grad_(True))
+        self._scaling = nn.Parameter(scale.requires_grad_(True))
+        self._opacity = nn.Parameter(opacity.requires_grad_(True))
+        self._shs_dc = nn.Parameter(color.reshape(1,1,3).contiguous().requires_grad_(True))
+        
+        self._shs_rest = nn.Parameter(torch.zeros((1,1,3), dtype=torch.float32, device="cuda").contiguous().requires_grad_(True))
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), dtype=torch.float32, device="cuda")
+    
     def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
@@ -426,6 +447,9 @@ class GaussianModel:
 
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 3)
+        # TEST
+        # scales = torch.full((fused_point_cloud.shape[0], 3), -1.7, device="cuda")
+        # TEST END
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
         rots[:, 0] = 1
 
@@ -887,12 +911,30 @@ class GaussianModel:
 
         self.densification_postfix(*args)
 
-    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, max_grad_normal, weights_threshold=1e-4):
+    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, max_grad_normal, 
+                          weights_threshold=1e-4, iteration=0, _path: str = ""):
         # print(self.xyz_gradient_accum.shape)
         grads = self.xyz_gradient_accum / self.denom
         grads_normal = self.normal_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
         grads_normal[grads_normal.isnan()] = 0.0
+
+
+        # for debugging and introspection
+        _grads_np = grads.clone().cpu().numpy()
+        counts, bins = np.histogram(_grads_np, bins=1000)
+
+        # Crashes... so instead save models and plot with different version
+        # f = plt.figure(figsize=(12, 8))
+        # plt.hist(bins[:-1], bins, weights=counts, log=True)
+        # plt.title(f'Grad Distribution iteration {iteration}')
+        # plt.xlabel("Accumulated Grad")
+        # plt.ylabel(f"Amount of Gaussians, Total: {self.active_gaussians}")
+        path = Path(_path, "graphs", f"grads_{iteration}.npy")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # plt.savefig( str(path) )
+        np.save(path, [counts, bins, grads.shape[0]])
+
 
         # if self._xyz.shape[0] < 1000000:
         self.densify_and_clone(grads, max_grad, extent, grads_normal, max_grad_normal)

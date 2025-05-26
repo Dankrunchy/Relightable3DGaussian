@@ -50,9 +50,12 @@ def load_img_rgb(path):
     return img
 
 def load_mask_bool(mask_file):
-    mask = imageio.imread(mask_file, mode='L')
-    mask = mask.astype(np.float32)
-    mask[mask > 0.5] = 1.0
+    try:
+        mask = imageio.imread(mask_file, mode='L')
+        mask = mask.astype(np.float32)
+        mask[mask > 0.5] = 1.0
+    except:
+        mask = np.array([[1.0]], dtype=np.float32)
 
     return mask
 

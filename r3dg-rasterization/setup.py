@@ -28,9 +28,10 @@ setup(
                 "rasterize_points.cu",
                 "ext.cpp"],
             extra_compile_args={
-                "nvcc": ["-I" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party/glm/"),
-                         "-O3"],
-                "cxx": ["-O3"]})
+                # "nvcc": ["-I" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party/glm/"), "-O3"],
+                "nvcc": ["-Xcompiler", "-fno-gnu-unique", "-I" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "third_party/glm/"), "-O3"],
+                "cxx": ["-O3"]
+		})
     ],
     cmdclass={
         'build_ext': BuildExtension

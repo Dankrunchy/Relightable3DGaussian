@@ -15,6 +15,18 @@
 #include <cooperative_groups/reduce.h>
 namespace cg = cooperative_groups;
 
+__constant__ float BBOX_COLORS[] = {
+	1.f, 0.f, 0.f,
+    0.f, 1.f, 0.f,
+    0.f, 0.f, 1.f,
+    1.f, 1.f, 0.f,
+    0.f, 1.f, 1.f,
+    1.f, 0.f, 1.f,
+    1.f, 1.f, 1.f,
+};
+
+constexpr int BBOX_COLORS_LEN = 7;
+
 // Forward method for converting the input spherical harmonics
 // coefficients of each Gaussian to a simple RGB color.
 __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, bool* clamped)
@@ -278,7 +290,8 @@ renderCUDA(
 	float* __restrict__ out_opacity,
 	float* __restrict__ out_depth,
 	float* __restrict__ out_feature,
-	float* __restrict__ out_weights
+	float* __restrict__ out_weights,
+	float* __restrict__ out_bbox
 	)
 {
 	// Identify current tile and associated min/max pixel range.
@@ -310,6 +323,9 @@ renderCUDA(
 	uint32_t contributor = 0;
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 }, F[33] = { 0 }, Depth = 0, Opacity = 0;
+	// Debug bboxes
+	float B[CHANNELS] = { 0 };
+	float T_B = 1.0f;
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -362,7 +378,12 @@ renderCUDA(
             float weight = alpha * T;
 			// Eq. (3) from 3D Gaussian splatting paper.
 			for (int ch = 0; ch < CHANNELS; ch++)
+			{
 				C[ch] += colors[collected_id[j] * CHANNELS + ch] * weight;
+				// bbox render
+				// B[ch] += colors[collected_id[j] * CHANNELS + ch] * con_o.w * T_B;
+				B[ch] += BBOX_COLORS[ ( collected_id[j] % BBOX_COLORS_LEN ) * CHANNELS + ch] * con_o.w * T_B;
+			}
 
 			for (int ch = 0; ch < S; ch++)
 				F[ch] += features[collected_id[j] * S + ch] * weight;
@@ -371,6 +392,7 @@ renderCUDA(
             Opacity += weight;
 
 			T = test_T;
+			T_B = T_B * (1 - con_o.w);
 			atomicAdd(&(out_weights[collected_id[j]]), weight);
 
 			// Keep track of last range entry to update this
@@ -386,7 +408,11 @@ renderCUDA(
 		final_T[pix_id] = T;
 		n_contrib[pix_id] = last_contributor;
 		for (int ch = 0; ch < CHANNELS; ch++)
+		{
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
+			// bbox render
+			out_bbox[ch * H * W + pix_id] = B[ch] + T_B * bg_color[ch];
+		}
 		for (int ch = 0; ch < S; ch++)
 			out_feature[ch * H * W + pix_id] = F[ch];
 		out_depth[pix_id] = Depth;
@@ -507,7 +533,8 @@ void FORWARD::render(
 	float* out_opacity,
 	float* out_depth,
 	float* out_feature,
-	float* out_weights
+	float* out_weights,
+	float* out_bbox
 	)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
@@ -526,7 +553,8 @@ void FORWARD::render(
 		out_opacity,
 		out_depth,
 		out_feature,
-		out_weights);
+		out_weights,
+		out_bbox);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
