@@ -226,7 +226,7 @@ def calculate_loss(viewpoint_camera, pc, render_pkg, opt, iteration):
     return loss, tb_dict
 
 def render(viewpoint_camera: Camera, pc: GaussianModel, pipe, bg_color: torch.Tensor, 
-           scaling_modifier=1.0,override_color=None, opt: OptimizationParams = None, 
+           scaling_modifier=1.0, override_color=None, opt: OptimizationParams = None, 
            is_training=False, dict_params=None, iteration=0):
     """
     Render the scene.

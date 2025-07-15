@@ -58,7 +58,7 @@ class GaussianModel:
     def __init__(self, sh_degree: int, render_type='render'):
         self.render_type = render_type
         self.use_pbr = render_type in ['neilf']
-        self.active_sh_degree = 3
+        self.active_sh_degree = sh_degree # 3
         self.max_sh_degree = sh_degree
         self._xyz = torch.empty(0)
         self._normal = torch.empty(0)  # normal
@@ -423,6 +423,7 @@ class GaussianModel:
         scale = self.scaling_inverse_activation(scale.reshape(1,3))
         rotation = rotation.reshape(1,4)
         opacity = self.inverse_opacity_activation( opacity.reshape(1,1) )
+        color = RGB2SH(color)
         
         self._xyz = nn.Parameter(position.requires_grad_(True))
         self._normal = nn.Parameter(torch.ones_like(position).requires_grad_(True))
@@ -431,7 +432,8 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacity.requires_grad_(True))
         self._shs_dc = nn.Parameter(color.reshape(1,1,3).contiguous().requires_grad_(True))
         
-        self._shs_rest = nn.Parameter(torch.zeros((1,1,3), dtype=torch.float32, device="cuda").contiguous().requires_grad_(True))
+        sh_rest_amount = (self.max_sh_degree + 1)**2 - 1
+        self._shs_rest = nn.Parameter(torch.zeros((1,sh_rest_amount,3), dtype=torch.float32, device="cuda").contiguous().requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), dtype=torch.float32, device="cuda")
     
     def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float):
